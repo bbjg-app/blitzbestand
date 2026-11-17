@@ -868,7 +868,18 @@ function showFirm(){$('firmS').textContent=CAT.firm||'Inventur';document.title='
   const c=await kvGet('cat');
   if(c&&c.items&&(c.ts||0)>(EMB.ts||0)){CAT=c;PH=Object.assign({},EMB.photos||{},(await kvGet('photos'))||{});loadState();try{OVR=Object.assign({},await phLoad());HIST=Object.assign({},await histLoad())}catch(e){}await checkLic();makeBase();rebuild();render();showMeta();showFirm()}
   else if(c&&(c.ts||0)<=(EMB.ts||0)&&EMB.items.length){/* Datei ist neuer */}
+  await autoLic();
 })();
+/* Nach dem Kauf: Digistore24 leitet hierher mit ?license_key=… → sofort freischalten, ohne Eintippen */
+async function autoLic(){try{
+  const u=new URL(location.href),h=new URLSearchParams(location.hash.replace(/^#/,''));
+  const k=u.searchParams.get('license_key')||u.searchParams.get('key')||h.get('license_key')||h.get('key');if(!k)return;
+  history.replaceState(null,'',location.pathname);
+  const t=k2tier(k);if(!t){sheet('<h4>Schlüssel nicht erkannt</h4><p>Bitte kurz an <b>help@bbjg.app</b> schreiben – wir helfen sofort.</p><div class="btns"><button class="pri" onclick="close()">OK</button></div>');return}
+  await checkLic();if(TIER==='profi'&&t==='plus')return;
+  CAT.key=k2fmt(k);const n=t==='profi'?'Profi':'Plus';await afterCatChange();
+  sheet('<h4>🎉 Vielen Dank für Ihren Kauf!</h4><p><b>BlitzBestand '+n+'</b> ist auf diesem Gerät freigeschaltet – Sie können sofort loslegen.</p><p style="font-size:13.5px;color:#555">Auf einem weiteren Gerät: einfach den Link aus der Kauf-E-Mail dort öffnen.</p><div class="btns"><button class="pri" id="tyOk">Los geht\'s</button></div>');$('tyOk').onclick=close;
+}catch(e){}}
 
 /* ---------- render ---------- */
 let sections=[];
