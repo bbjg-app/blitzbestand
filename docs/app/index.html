@@ -129,7 +129,7 @@ h3.grp{font-family:var(--head);font-weight:600;font-size:15px;color:var(--mute);
 .veil{cursor:pointer;-webkit-tap-highlight-color:transparent}.sheet{cursor:auto}
 .veil{position:fixed;inset:0;background:rgba(10,20,35,.45);z-index:40;display:none;align-items:flex-end;justify-content:center}
 .veil.on{display:flex}
-.sheet{background:#fff;width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom));max-height:90vh;overflow:auto}
+.sheet{background:#fff;width:100%;max-width:520px;border-radius:18px 18px 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom));max-height:90vh;overflow:auto}@media (min-width:600px) and (min-height:500px){.veil{align-items:center}.sheet{border-radius:18px;max-height:86vh;box-shadow:0 12px 40px rgba(10,20,35,.35)}}
 .sheet h4{font-family:var(--head);font-size:21px;margin:0 0 4px;color:var(--navy)}
 .sheet p{margin:4px 0 14px;color:var(--mute);font-size:14.5px;line-height:1.4}
 .sheet label{display:block;font-size:13px;font-weight:600;color:var(--mute);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.5px}
@@ -823,7 +823,7 @@ function k2tier(k){k=k2norm(k);if(k.length!==20||[...k].some(ch=>B32.indexOf(ch)
 function k2fmt(k){const n=k2norm(k);return n.length===20?'BBJG-'+n.match(/.{5}/g).join('-'):String(k||'').trim().toUpperCase()}
 async function tierOf(firm,key){const t2=k2tier(key);if(t2)return t2;key=String(key||'').trim().toUpperCase();if(!key||!normFirm(firm))return 'basic';if(key===await keyFor(firm,'profi'))return 'profi';if(key===await keyFor(firm,'plus')||key===await keyFor(firm))return 'plus';return 'basic'}
 async function checkLic(){try{TIER=await tierOf(CAT.firm,CAT.key)}catch(e){TIER='basic'}FULL=TIER!=='basic';showTier();return FULL}
-function showTier(){const l=$('vwL');if(l)l.textContent=lockI();const b=$('tierB');if(!b)return;b.textContent=TIER==='profi'?'Profi':(isTrial()?'⭐ Profi-Test · noch '+trialLeft()+' Tage':(TIER==='plus'?'Plus':'Basic'));b.className='tierb'+(isTrial()?' tr':'')}
+function showTier(){const l=$('vwL');if(l)l.textContent=lockI();const b=$('tierB');if(!b)return;b.textContent=TIER==='profi'?'Profi':(isTrial()?'⭐ Profi-Test · noch '+trialLeft()+' Tage':(TIER==='plus'?'Plus':'Basic'));b.className='tierb'+(isTrial()?' tr':'');b.style.cursor='pointer';b.title='Freischalten / Lizenz';b.onclick=()=>licDlg()}
 function credit(){return 'Erstellt mit BlitzBestand · © 2026 BBJg · Dmitrijs Medvedevs'+(TIER==='profi'?' · Profi':TIER==='plus'?' · Plus':' · Basic (kostenlos)')}
 let PH=Object.assign({},EMB.photos||{});
 let BASE=[],ITEMS=[];
@@ -870,10 +870,17 @@ function showFirm(){$('firmS').textContent=CAT.firm||'Inventur';document.title='
   else if(c&&(c.ts||0)<=(EMB.ts||0)&&EMB.items.length){/* Datei ist neuer */}
   await autoLic();
 })();
+const BUYING=/[?&#](license_key|key)=/.test(location.search+location.hash);
+/* Nach dem Kauf zuerst die neueste Version holen (ohne Rückfrage – der Kauf gilt als Zustimmung), dann freischalten */
+async function freshFirst(){try{if(!('serviceWorker' in navigator)||!navigator.serviceWorker.controller)return false;
+  const r=await navigator.serviceWorker.getRegistration();if(!r)return false;try{await r.update()}catch(e){}
+  let w=r.waiting;if(!w&&r.installing){const n=r.installing;w=await new Promise(res=>{const t=setTimeout(()=>res(null),8000);n.addEventListener('statechange',()=>{if(n.state==='installed'){clearTimeout(t);res(n)}else if(n.state==='redundant'){clearTimeout(t);res(null)}})})}
+  if(!w)return false;let d=0;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!d){d=1;location.reload()}});w.postMessage('upd');return true}catch(e){return false}}
 /* Nach dem Kauf: Digistore24 leitet hierher mit ?license_key=… → sofort freischalten, ohne Eintippen */
 async function autoLic(){try{
   const u=new URL(location.href),h=new URLSearchParams(location.hash.replace(/^#/,''));
   const k=u.searchParams.get('license_key')||u.searchParams.get('key')||h.get('license_key')||h.get('key');if(!k)return;
+  if(await freshFirst())return;
   history.replaceState(null,'',location.pathname);
   const t=k2tier(k);if(!t){sheet('<h4>Schlüssel nicht erkannt</h4><p>Bitte kurz an <b>help@bbjg.app</b> schreiben – wir helfen sofort.</p><div class="btns"><button class="pri" onclick="close()">OK</button></div>');return}
   await checkLic();if(TIER==='profi'&&t==='plus')return;
@@ -1331,7 +1338,7 @@ const TOUCH=(navigator.maxTouchPoints||0)>0&&matchMedia('(pointer:coarse)').matc
 async function printFile(bytes){if(dl||TOUCH)return false;const url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));const w=window.open(url,'_blank');if(!w){URL.revokeObjectURL(url);return false}setTimeout(()=>URL.revokeObjectURL(url),60000);return true}
 /* Web-App: offline + Symbol (nur auf der eigenen Website, nicht in Claude/Datei) */
 /* Updates nur mit Zustimmung: die gespeicherte Version läuft weiter, bis man „Installieren" tippt */
-function updAsk(w){if(!w||!navigator.serviceWorker.controller)return;const go=()=>{if(document.querySelector('#veil.on')){setTimeout(go,4000);return}
+function updAsk(w){if(!w||!navigator.serviceWorker.controller||BUYING)return;const go=()=>{if(document.querySelector('#veil.on')){setTimeout(go,4000);return}
   sheet(`<h4>Neue Version verfügbar</h4><p>Ihre Daten bleiben erhalten. Wenn Sie nicht installieren, läuft die bisherige Version unverändert weiter – auch ohne Internet.</p>
   <div class="btns"><button class="pri" id="upY">Installieren</button><button id="upN">Später</button></div><div class="crm">Updates kommen nur von BBJg · Dmitrijs Medvedevs</div>`);
   $('upN').onclick=close;$('upY').onclick=()=>{close();let done=0;navigator.serviceWorker.addEventListener('controllerchange',()=>{if(!done){done=1;location.reload()}});w.postMessage('upd')}};go()}
