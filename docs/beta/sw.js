@@ -1,0 +1,7 @@
+/* BlitzBestand BETA – eigener Cache, berührt die normale App nicht */
+const C='bbB-beta-v1';const F=['./','index.html','manifest.webmanifest','icon-192.png','icon-512.png','icon-180.png'];
+self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(F.map(u=>new Request(u,{cache:'reload'})))))});
+self.addEventListener('message',e=>{if(e.data==='upd')self.skipWaiting()});
+self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(k=>Promise.all(k.filter(x=>x!==C&&(x.startsWith('bbB-beta-'))).map(x=>caches.delete(x)))).then(()=>self.clients.claim()))});
+self.addEventListener('fetch',e=>{const r=e.request;if(r.method!=='GET'||new URL(r.url).origin!==location.origin)return;
+  e.respondWith(caches.open(C).then(c=>c.match(r,{ignoreSearch:true}).then(m=>m||(r.mode==='navigate'?c.match('index.html'):null)).then(m=>m||fetch(r))))});
