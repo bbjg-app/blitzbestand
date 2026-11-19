@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Vielen Dank – BlitzBestand</title><meta name="robots" content="noindex"><meta name="theme-color" content="#1f3a5f"><link rel="icon" href="app/icon-192.png">
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#eef2f7;color:#1d2b3e;line-height:1.55}
+header{background:#1f3a5f;color:#fff;text-align:center;padding:26px 18px 30px}header img{width:76px;height:76px;border-radius:18px;box-shadow:0 6px 18px rgba(0,0,0,.25)}header h1{margin:10px 0 2px;font-size:26px}header p{margin:0;opacity:.85}
+main{max-width:640px;margin:-14px auto 30px;padding:0 14px}.c{background:#fff;border-radius:18px;padding:20px 22px;box-shadow:0 2px 12px rgba(20,40,70,.08);margin-bottom:14px}
+h2{font-size:18px;margin:0 0 8px}ol{margin:6px 0 0;padding-left:20px}li{margin:4px 0}
+.go{display:block;text-align:center;background:#ffd23f;color:#1d2b3e;font-weight:800;font-size:18px;text-decoration:none;padding:15px;border-radius:14px;margin:14px 0 6px}.go:hover{background:#ffdf6b}
+.key{font-family:ui-monospace,Menlo,monospace;font-size:17px;font-weight:700;background:#f3f6fa;border:1px dashed #9fb3cc;border-radius:10px;padding:10px 12px;text-align:center;user-select:all;word-break:break-all}
+.s{font-size:13.5px;color:#5b6676}footer{text-align:center;font-size:13px;color:#7a8596;padding:6px 0 26px}footer a{color:#5b6676}
+</style></head><body>
+<header><img src="app/icon-192.png" alt=""><h1>Vielen Dank für Ihren Kauf!</h1><p>BlitzBestand <b id="tier">Plus / Profi</b> – Lizenz für die Inventur-App</p></header>
+<main>
+<div class="c"><h2>So erhalten Sie Ihr Produkt</h2>
+<p>Sie haben einen <b>digitalen Lizenzschlüssel</b> gekauft. Er schaltet die Web-App BlitzBestand dauerhaft frei (einmalig, kein Abo). Es wird nichts verschickt und nichts heruntergeladen.</p>
+<a class="go" id="go" href="app/">App öffnen – wird automatisch freigeschaltet →</a>
+<p class="s" id="auto" style="text-align:center;margin:0"></p></div>
+<div class="c"><h2>Ihr Lizenzschlüssel</h2><div class="key" id="key">steht in Ihrer Kauf-E-Mail</div>
+<ol><li><b>Dieses Gerät:</b> „App öffnen“ antippen – fertig, nichts eintippen.</li>
+<li><b>Weitere Geräte:</b> den Link aus der Kauf-E-Mail von Digistore24 dort öffnen.</li>
+<li><b>Von Hand:</b> in der App oben auf „Plus/Profi“ bzw. „Basic“ tippen → Schlüssel einfügen → „Freischalten“.</li></ol>
+<p class="s">Die App läuft im Browser am Handy und PC, auch offline. Ihre Daten bleiben auf Ihrem Gerät.</p></div>
+<div class="c"><p style="margin:0"><b>Die Abbuchung erfolgt durch Digistore24.com.</b> Rechnung und Lizenzschlüssel erhalten Sie zusätzlich per E-Mail von Digistore24.</p>
+<p class="s" style="margin:8px 0 0">Fragen? <a href="#" onclick="location.href='mai'+'lto:help'+'@'+'bbjg.app';return false">help<span>@</span>bbjg.app</a></p></div>
+</main>
+<footer><a href="./">blitzbestand.com</a> · <a href="impressum.html">Impressum</a> · <a href="datenschutz.html">Datenschutz</a></footer>
+<script>
+(function(){var q=new URLSearchParams(location.search),k=(q.get('license_key')||q.get('key')||'').trim();
+ var pn=(q.get('product_name')||'')+'';if(/profi/i.test(pn))document.getElementById('tier').textContent='Profi';else if(/plus/i.test(pn))document.getElementById('tier').textContent='Plus';
+ if(!k)return;history.replaceState(null,'',location.pathname);
+ document.getElementById('key').textContent=k;var u='app/#key='+encodeURIComponent(k);document.getElementById('go').href=u;
+ var n=8,a=document.getElementById('auto');(function t(){a.textContent='Die App öffnet sich in '+n+' s automatisch.';if(n--<=0){location.href=u;return}setTimeout(t,1000)})();})();
+</script>
+</body></html>
