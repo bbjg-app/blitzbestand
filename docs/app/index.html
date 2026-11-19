@@ -1637,21 +1637,112 @@ function pick(accept,multiple){return new Promise(res=>{const i=document.createE
   i.onchange=()=>{res([...i.files]);i.remove()};document.body.appendChild(i);i.click()})}
 const HEAD={num:/^(art(ikel)?[\s._-]*(nr|nummer|no)|artikelnummer|teile?[\s-]*nr|nummer|nr\.?|item|part[\s-]*(no|number)|sku|material[\s-]*nr)/i,
   spec:/^(bezeichnung|beschreibung|name|benennung|description|artikel(bezeichnung)?|text)/i,art:/^(zusatz|info|details?|bemerkung|maß|abmessung|hersteller)/i,
-  grp:/^(gruppe|warengruppe|group|typ|art$|unter)/i,sec:/^(abschnitt|kategorie|category|bereich|hauptgruppe|kapitel)/i};
+  grp:/^(gruppe|warengruppe|group|typ|art$|unter)/i,sec:/^(abschnitt|kategorie|category|bereich|hauptgruppe|kapitel)/i,qty:/^(menge|anzahl|st(ü|ue)ckzahl|ist[\s-]*menge|gez(ä|ae)hlt|qty|quantity|count)/i};
 function normNum(v){if(v==null)return '';if(typeof v==='number')return Number.isInteger(v)?String(v):String(v);return String(v).trim().replace(/\s+/g,'')}
-async function importExcel(file){
-  const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];
-  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
-  let hi=-1,map={};
-  for(let r=0;r<Math.min(rows.length,15)&&hi<0;r++){const m={};rows[r].forEach((c,ci)=>{const s=String(c).trim();for(const k in HEAD)if(m[k]==null&&HEAD[k].test(s)){m[k]=ci;break}});if(m.num!=null&&m.spec!=null){hi=r;map=m}}
-  if(hi<0){hi=-1;map={num:0,spec:1,art:2,grp:3,sec:4}}
-  const items=[],seen=new Set();let dup=0,skip=0;
-  for(let r=hi+1;r<rows.length;r++){const row=rows[r];const num=normNum(row[map.num]);const spec=String(row[map.spec]??'').trim();
-    if(!num){if(spec)skip++;continue}if(seen.has(num)){dup++;continue}seen.add(num);
+function qNum(rv){const v=typeof rv==='number'?rv:parseFloat(String(rv??'').replace(/\s/g,'').replace(',','.'));return v>0&&isFinite(v)?Math.round(Math.min(999999,v)*1000)/1000:0}
+function splitSpec(raw,grp){const ls=String(raw??'').split(/\n|\s·\s/).map(s=>s.trim()).filter(Boolean);if(ls.length<2)return {spec:ls[0]||'',art:''};
+  const spec=ls.pop();const art=ls.filter(x=>x!==grp&&x!==spec).join(' · ');return {spec,art}}
+/* Zeilen (Excel/PDF) → Artikel, Gruppen aus Überschriftszeilen, Mengen */
+function rowsToItems(rows,hi,map,rowNo,one){
+  const items=[],seen=new Set(),q={},rowOf={};let dup=0,skip=0,cSec='',cGrp='',pend=[];
+  for(let r=hi+1;r<rows.length;r++){const row=rows[r]||[];const num=normNum(row[map.num]);const rawSpec=row[map.spec];
+    if(!num){const filled=row.map(c=>String(c??'').trim()).filter(Boolean);
+      if(filled.length===1&&typeof filled[0]==='string'&&!/^[\d.,\s]+$/.test(filled[0])&&filled[0].length<80){pend.push(filled[0]);continue}
+      if(String(rawSpec??'').trim())skip++;continue}
+    if(pend.length){if(pend.length>=2&&!one){cSec=pend[0];cGrp=pend[pend.length-1]}else{cGrp=pend[pend.length-1];if(one||!cSec)cSec=cGrp}pend=[]}
+    if(seen.has(num)){dup++;continue}seen.add(num);
     const g=map.grp!=null?String(row[map.grp]??'').trim():'';const s=map.sec!=null?String(row[map.sec]??'').trim():'';
-    items.push({num,spec:spec||num,art:map.art!=null?String(row[map.art]??'').trim():'',grp:g||s||'Artikel',sec:s||g||'Artikel'})}
-  return {items,dup,skip};
+    const grp=g||cGrp||s||'Artikel',sec=s||cSec||g||cGrp||'Artikel';
+    let {spec,art}=splitSpec(rawSpec,grp);if(map.art!=null){const a=String(row[map.art]??'').trim();if(a)art=art?art+' · '+a:a}
+    items.push({num,spec:spec||num,art,grp,sec});rowOf[num]=rowNo(r);
+    if(map.qty!=null){const v=qNum(row[map.qty]);if(v)q[num]=v}}
+  return {items,dup,skip,q,rowOf};
 }
+function findHead(rows){let hi=-1,map={};
+  for(let r=0;r<Math.min(rows.length,15)&&hi<0;r++){const m={};(rows[r]||[]).forEach((c,ci)=>{const s=String(c).trim();for(const k in HEAD)if(m[k]==null&&HEAD[k].test(s)){m[k]=ci;break}});if(m.num!=null&&m.spec!=null){hi=r;map=m}}
+  if(hi<0){hi=-1;map={num:0,spec:1,art:2,grp:3,sec:4}}return {hi,map}}
+function zf(wb,p){const f=wb.files&&(wb.files[p]||wb.files['/'+p]);if(!f)return null;const c=f.content||f._data||f;return c instanceof Uint8Array?c:(c&&c.length!=null?new Uint8Array(c):null)}
+function zt(wb,p){const b=zf(wb,p);return b?new TextDecoder().decode(b):''}
+function relMap(xml){const m={};xml.replace(/<Relationship\b[^>]*>/g,t=>{const id=(t.match(/Id="([^"]+)"/)||[])[1],tg=(t.match(/Target="([^"]+)"/)||[])[1];if(id&&tg)m[id]=tg});return m}
+function resolveP(base,tg){if(tg.startsWith('/'))return tg.slice(1);const p=base.split('/');p.pop();tg.split('/').forEach(s=>{if(s==='..')p.pop();else if(s!=='.')p.push(s)});return p.join('/')}
+/* eingebettete Bilder eines Blatts: [{r0,r1,data,type}] (Zeilen 0-basiert) */
+function sheetPics(wb,sn){try{
+  const wbx=zt(wb,'xl/workbook.xml');const wrel=relMap(zt(wb,'xl/_rels/workbook.xml.rels'));
+  let rid=null;wbx.replace(/<sheet\b[^>]*>/g,t=>{const n=(t.match(/name="([^"]+)"/)||[])[1];const id=(t.match(/r:id="([^"]+)"/)||[])[1];if(n&&n.replace(/&amp;/g,'&')===sn)rid=id});
+  const sp=rid&&wrel[rid]?resolveP('xl/workbook.xml',wrel[rid]):'xl/worksheets/sheet1.xml';
+  const srel=relMap(zt(wb,sp.replace(/([^/]+)$/,'_rels/$1.rels')));const sx=zt(wb,sp);
+  const out=[];(sx.match(/<drawing\b[^>]*r:id="([^"]+)"/g)||[]).forEach(dt=>{const id=dt.match(/r:id="([^"]+)"/)[1];if(!srel[id])return;
+    const dp=resolveP(sp,srel[id]);const dx=zt(wb,dp);const drel=relMap(zt(wb,dp.replace(/([^/]+)$/,'_rels/$1.rels')));
+    (dx.match(/<(\w+:)?(twoCellAnchor|oneCellAnchor)\b[\s\S]*?<\/(\w+:)?\2>/g)||[]).forEach(a=>{
+      const fr=a.match(/<(?:\w+:)?from>[\s\S]*?<(?:\w+:)?row>(\d+)<\/(?:\w+:)?row>/),to=a.match(/<(?:\w+:)?to>[\s\S]*?<(?:\w+:)?row>(\d+)<\/(?:\w+:)?row>(?:[\s\S]*?<(?:\w+:)?rowOff>(\d+)<\/(?:\w+:)?rowOff>)?/);
+      const em=a.match(/r:embed="([^"]+)"/);if(!fr||!em||!drel[em[1]])return;
+      const r0=+fr[1];let r1=to?+to[1]:r0;if(to&&r1>r0&&(+to[2]||0)===0)r1--;
+      const mp=resolveP(dp,drel[em[1]]);const data=zf(wb,mp);if(!data)return;
+      const ext=(mp.split('.').pop()||'').toLowerCase();out.push({r0,r1,data,type:ext==='png'?'image/png':ext==='gif'?'image/gif':'image/jpeg'})})});
+  return out}catch(e){console.warn(e);return []}}
+async function importExcel(file){
+  const buf=await file.arrayBuffer();const wb=XLSX.read(buf,{type:'array',bookFiles:true});
+  const sn=wb.SheetNames.find(x=>/^alle\s*artikel$/i.test(String(x).trim()))||wb.SheetNames[0];const ws=wb.Sheets[sn];
+  const off=ws['!ref']?XLSX.utils.decode_range(ws['!ref']).s.r:0;
+  const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:'',blankrows:true});
+  const {hi,map}=findHead(rows);const res=rowsToItems(rows,hi,map,r=>r+off);
+  res.pics={};const pics=sheetPics(wb,sn);
+  if(pics.length){const span={};res.items.forEach(it=>{const k=it.sec+'|'+it.grp,rr=res.rowOf[it.num];const s=span[k]||(span[k]={a:rr,b:rr});s.a=Math.min(s.a,rr);s.b=Math.max(s.b,rr)});
+    res.items.forEach(it=>{const rr=res.rowOf[it.num];let p=pics.find(x=>rr>=x.r0&&rr<=x.r1);
+      if(!p){const s=span[it.sec+'|'+it.grp];const inG=pics.filter(x=>x.r0>=s.a-1&&x.r0<=s.b);if(inG.length){const up=inG.filter(x=>x.r0<=rr).sort((a,b)=>b.r0-a.r0)[0];p=up||inG.sort((a,b)=>a.r0-b.r0)[0]}}
+      if(p)res.pics[it.num]=p})}
+  return res;
+}
+/* PDF (z. B. „Bestand“ oder Zählliste der App): Zeilen über Textposition */
+async function importPdf(file){
+  if(!pdfjsLib.GlobalWorkerOptions.workerSrc)pdfjsLib.GlobalWorkerOptions.workerSrc=URL.createObjectURL(new Blob([document.getElementById('pdfw').textContent],{type:'text/javascript'}));
+  const doc=await pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;const rows=[];
+  for(let i=1;i<=doc.numPages;i++){const pg=await doc.getPage(i);const tc=await pg.getTextContent();
+    const its=tc.items.filter(t=>t.str.trim()).map(t=>({s:t.str,x:t.transform[4],w:t.width||0,y:Math.round(t.transform[5])}));
+    const ys=[...new Set(its.map(t=>t.y))].sort((a,b)=>b-a);const lines=[];
+    ys.forEach(y=>{const L=lines.find(l=>Math.abs(l.y-y)<=2);if(L)L.y2.push(y);else lines.push({y,y2:[y]})});
+    lines.forEach(l=>{const ts=its.filter(t=>l.y2.includes(t.y)).sort((a,b)=>a.x-b.x);const cells=[];let cur=null;ts.forEach(t=>{if(cur&&t.x-(cur.x+cur.w)<1.2&&!/\s$/.test(cur.s)&&!/^\s/.test(t.s)){cur.s+=t.s;cur.w=t.x+t.w-cur.x}else{if(cur)cells.push(cur.s.trim());cur={s:t.s,x:t.x,w:t.w}}});if(cur)cells.push(cur.s.trim());rows.push(cells.filter(Boolean))})}
+  /* Spalten: Pos | Nr | Bezeichnung | Menge  (oder Nr | Bezeichnung | Menge) */
+  const norm=rows.map(c=>{if(c.length===1)return [c[0]];
+    let a=c.slice();const last=a[a.length-1];const qv=/^\d+([.,]\d+)?$/.test(last)?a.pop():'';
+    if(a.length>=2&&/^\d{1,4}$/.test(a[0])&&/^[A-Za-z0-9][\w./-]{2,}$/.test(a[1]))a.shift();
+    if(!a.length)return [];return ['',a[0],a.slice(1).join(' · '),qv]});
+  const hi=norm.findIndex(c=>c.some(x=>/^art(ikel)?[\s.-]*nr/i.test(x)));
+  const junk=c=>c.some(x=>/^art(ikel)?[\s.-]*nr|^pos\.?$|seite\s*\d+|^datum|^monteur:|teile gesamt|^positionen:|^gezählt|unterschrift/i.test(String(x)));
+  const body=norm.slice(hi+1).filter(c=>c.length&&!junk(c));
+  const res=rowsToItems([[]].concat(body),0,{num:1,spec:2,qty:3},r=>r,true);res.pics={};res.pdf=true;return res;
+}
+function fileKind(f){const n=(f.name||'').toLowerCase();if(/\.(xlsx|xlsm|xls|csv|ods)$/.test(n))return 'xls';if(n.endsWith('.pdf')||f.type==='application/pdf')return 'pdf';if((f.type||'').startsWith('image/'))return 'img';return ''}
+async function loadFile(f){
+  const k=fileKind(f);if(!k){toast('Dateityp nicht unterstützt – Excel, CSV, PDF oder Fotos');return}
+  if(k==='img'){return ACT.photos([f])}
+  toast('Datei wird gelesen …');
+  let res;try{res=k==='pdf'?await importPdf(f):await importExcel(f)}catch(e){console.error(e);toast(k==='pdf'?'PDF nicht lesbar':'Datei nicht lesbar – bitte .xlsx, .csv oder .pdf');return}
+  if(!res.items.length){toast('Keine Artikel gefunden – Spalte „Artikelnr.“ prüfen');return}
+  const nq=Object.keys(res.q).length,np=Object.keys(res.pics).length,ng=new Set(res.items.map(x=>x.grp)).size;
+  const known=BASE.length?res.items.filter(x=>BASE.some(b=>b.num===x.num)).length:0;
+  const mengenOnly=BASE.length&&res.pdf;
+  sheet(`<h4>${res.items.length} Artikel gefunden</h4><p>${nq?'<b>'+nq+' Mengen</b>':'keine Mengen'}${np?' · <b>'+np+' Fotos</b>':''}${ng>1?' · '+ng+' Gruppen':''}.<br>
+    ${res.dup?res.dup+' doppelte Nummern übersprungen. ':''}${res.skip?res.skip+' Zeilen ohne Nummer übersprungen. ':''}
+    ${mengenOnly?known+' davon im Katalog – nur Mengen übernehmen oder als neuen Katalog laden.':BASE.length?'Der bisherige Katalog ('+BASE.length+') wird ersetzt. Gezählte Mengen bleiben bei gleicher Artikelnr. erhalten.':''}</p>
+    <div class="btns">${mengenOnly?'<button class="pri" id="iQ">Nur Mengen übernehmen</button>':''}<button class="${mengenOnly?'':'pri'}" id="iY">${mengenOnly?'Als neuen Katalog':'Katalog übernehmen'}</button><button id="iN">Abbrechen</button></div>`);
+  $('iN').onclick=close;
+  const applyQ=list=>{const qk=Object.keys(res.q).filter(k=>list.some(x=>x.num===k));if(qk.length){const o=Object.assign({},S.q);qk.forEach(k=>o[k]=res.q[k]);S.q=o;S.ts=Date.now();save()}return qk.length};
+  if($('iQ'))$('iQ').onclick=async()=>{const n=applyQ(BASE);await afterCatChange(n+' Mengen übernommen')};
+  $('iY').onclick=async()=>{const cut=res.items.length>limit();const items=cut?res.items.slice(0,limit()):res.items;
+    toast('Wird übernommen …');let pn=0;for(const it of items){const p=res.pics[it.num];if(!p)continue;try{PH[it.num]=await shrink(new File([p.data],'b.'+p.type.split('/')[1],{type:p.type}));delete lightCache['p:'+it.num];pn++}catch(e){}}
+    CAT.items=items;const qn=applyQ(items);
+    await afterCatChange((cut?('Basic: '+limit()+' Artikel geladen – für mehr: Plus oder Profi'):(items.length+' Artikel geladen'))+(qn?' · '+qn+' Mengen':'')+(pn?' · '+pn+' Fotos':''))};
+}
+/* Datei einfach ins Fenster ziehen */
+(function(){let dz=null;const show=on=>{if(on&&!dz){dz=document.createElement('div');dz.id='dropz';dz.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(31,58,95,.82);color:#fff;display:flex;align-items:center;justify-content:center;font:800 22px system-ui;text-align:center;padding:30px;border:6px dashed #ffd23f;pointer-events:none';dz.innerHTML='📥 Datei hier ablegen<br><span style="font-weight:500;font-size:15px">Excel · CSV · PDF · Fotos</span>';document.body.appendChild(dz)}if(!on&&dz){dz.remove();dz=null}};
+  let n=0;const hasF=e=>[...(e.dataTransfer&&e.dataTransfer.types||[])].includes('Files');
+  addEventListener('dragenter',e=>{if(!hasF(e))return;e.preventDefault();n++;show(true)});
+  addEventListener('dragover',e=>{if(!hasF(e))return;e.preventDefault();e.dataTransfer.dropEffect='copy'});
+  addEventListener('dragleave',e=>{if(!hasF(e))return;n=Math.max(0,n-1);if(!n)show(false)});
+  addEventListener('drop',async e=>{if(!hasF(e))return;e.preventDefault();n=0;show(false);const fs=[...e.dataTransfer.files];if(!fs.length)return;
+    const imgs=fs.filter(f=>fileKind(f)==='img'),rest=fs.filter(f=>fileKind(f)!=='img');
+    if(rest.length)await loadFile(rest[0]);else if(imgs.length)await ACT.photos(imgs)})})();
 function demoInfo(){sheet(`<h4>Grenze erreicht</h4><p>${isTrial()?'Im Profi-Test sind bis zu '+TLIM:'Die kostenlose Basic-Version erlaubt '+LIM} Artikel. Ihre Daten bleiben vollständig erhalten – für mehr Artikel <b>Plus</b> (ohne Limit) oder <b>Profi</b> (ohne Limit + Lager-Funktionen) freischalten.</p>
   <div class="hint" style="margin-top:8px;font-size:13.5px">🛒 <b>Jetzt kaufen</b> – danach ist die App sofort freigeschaltet (einmalig, inkl. MwSt.):<div style="display:flex;gap:8px;margin-top:8px"><a href="https://www.checkout-ds24.com/product/768307" style="flex:1;text-align:center;padding:10px;border-radius:10px;background:#1f3a5f;color:#fff;font-weight:800;text-decoration:none">Plus · 15 €</a><a href="https://www.checkout-ds24.com/product/768316" style="flex:1;text-align:center;padding:10px;border-radius:10px;background:#ffd23f;color:#1d2b3e;font-weight:800;text-decoration:none">Profi · 75 €</a></div></div><div class="btns"><button class="pri" id="dK">🔑 Plus / Profi freischalten</button><button id="dX">Schließen</button></div><div class="crm">Vollversion: BBJg · Dmitrijs Medvedevs</div>`);$('dK').onclick=licDlg;$('dX').onclick=close}
 function licDlg(){sheet(`<h4>Freischalten</h4><p>${FULL?'<b>'+(TIER==='profi'?'Profi':'Plus')+'</b> ist'+(CAT.firm?' für <b>'+esc(CAT.firm)+'</b>':'')+' freigeschaltet.':'Lizenzschlüssel aus der Kauf-E-Mail eintragen. Der Firmenname ist freiwillig (für Listen und Ausdrucke).'}</p>
@@ -1663,12 +1754,7 @@ function licDlg(){sheet(`<h4>Freischalten</h4><p>${FULL?'<b>'+(TIER==='profi'?'P
     CAT.firm=f;CAT.key=k2fmt(k);await afterCatChange((t==='profi'?'Profi':'Plus')+' freigeschaltet ✓')}}
 async function afterCatChange(msg){await saveCat();await checkLic();makeBase();rebuild();filter='all';query='';$('q').value='';render();showFirm();close();if(msg)toast(msg)}
 const ACT={
-  async load(){const f=(await pick('.xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv'))[0];if(!f)return;
-    let res;try{res=await importExcel(f)}catch(e){toast('Datei nicht lesbar – bitte .xlsx oder .csv');return}
-    if(!res.items.length){toast('Keine Artikel gefunden – Spalte „Artikelnr.“ prüfen');return}
-    sheet(`<h4>${res.items.length} Artikel gefunden</h4><p>${res.dup?res.dup+' doppelte Nummern übersprungen. ':''}${res.skip?res.skip+' Zeilen ohne Nummer übersprungen. ':''}${BASE.length?'Der bisherige Katalog ('+BASE.length+') wird ersetzt. Gezählte Mengen bleiben bei gleicher Artikelnr. erhalten.':''}</p>
-      <div class="btns"><button class="pri" id="iY">Katalog übernehmen</button><button id="iN">Abbrechen</button></div>`);
-    $('iN').onclick=close;$('iY').onclick=()=>{CAT.items=res.items;const cut=res.items.length>limit();if(cut)res.items=res.items.slice(0,limit());afterCatChange(cut?('Basic: '+limit()+' Artikel geladen – für mehr: Plus oder Profi'):(res.items.length+' Artikel geladen'))}},
+  async load(){const f=(await pick('.xlsx,.xls,.csv,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv'))[0];if(!f)return;await loadFile(f)},
   tpl(){const H=v=>({v,t:'s',st:2}),T=v=>({v,t:'s'}),N=v=>({v,t:'n'});
     const rows=[[H('Artikelnr.'),H('Bezeichnung'),H('Zusatz'),H('Gruppe'),H('Abschnitt')],
       [N(10001),T('Sechskantschraube M8×20'),T('verzinkt'),T('Schrauben'),T('Befestigung')],
@@ -1681,8 +1767,8 @@ const ACT={
       ['xl/_rels/workbook.xml.rels','<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
       ['xl/styles.xml',styles],['xl/worksheets/sheet1.xml',sheetXml(rows,[14,40,24,26,24],[],{freeze:1})]];
     close();saveFile('Katalog_Vorlage.xlsx',zip(files),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')},
-  async photos(){if(!BASE.length){toast('Zuerst Katalog laden');return}
-    const fs=await pick('image/*',true);if(!fs.length)return;close();toast('Fotos werden verarbeitet …');
+  async photos(given){if(!BASE.length){toast('Zuerst Katalog laden');return}
+    const fs=Array.isArray(given)?given:await pick('image/*',true);if(!fs.length)return;close();toast('Fotos werden verarbeitet …');
     const nums=new Map(BASE.map(x=>[x.num.toLowerCase(),x.num]));let ok=0,miss=[];
     for(const f of fs){const base=f.name.replace(/\.[^.]+$/,'').trim().toLowerCase();const key=nums.get(base)||nums.get(base.replace(/[^0-9a-z]/g,''))||nums.get((base.match(/\d{3,}/)||[''])[0]);
       if(!key){miss.push(f.name);continue}try{PH[key]=await shrink(f);ok++}catch(e){miss.push(f.name)}}
